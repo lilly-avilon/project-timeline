@@ -1,53 +1,69 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import {
+  getFirestore, initializeFirestore, doc, setDoc, onSnapshot,
+  persistentLocalCache, persistentMultipleTabManager,
+} from 'firebase/firestore';
 
 const apiKey    = import.meta.env.VITE_FIREBASE_API_KEY;
 const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 
 let db = null;
 if (apiKey && projectId) {
-  const app = getApps().length ? getApp() : initializeApp({
+  const alreadyInit = getApps().length > 0;
+  const app = alreadyInit ? getApp() : initializeApp({
     apiKey,
     authDomain: `${projectId}.firebaseapp.com`,
     projectId,
   });
-  db = getFirestore(app);
+  if (alreadyInit) {
+    // HMR in dev: Firestore already configured, reuse existing instance
+    db = getFirestore(app);
+  } else {
+    try {
+      // Enable IndexedDB persistence so repeat visits load from cache instantly
+      db = initializeFirestore(app, {
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      });
+    } catch {
+      // Private browsing or unsupported browser — fall back to in-memory
+      db = getFirestore(app);
+    }
+  }
 }
 
 export const hasBackend = !!db;
 
-export async function fetchProjects(workspaceId) {
+// Returns a unique writeId string on success (for echo suppression), null on failure.
+export async function saveProjectsToDB(workspaceId, projects) {
   if (!db) return null;
   try {
-    const snap = await getDoc(doc(db, 'workspaces', workspaceId));
-    return snap.exists() ? (snap.data().projects ?? []) : [];
+    const writeId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    await setDoc(doc(db, 'workspaces', workspaceId), {
+      projects,
+      updatedAt: new Date().toISOString(),
+      writeId,
+    });
+    return writeId;
   } catch {
     return null;
   }
 }
 
-export async function saveProjectsToDB(workspaceId, projects) {
-  if (!db) return false;
-  try {
-    await setDoc(doc(db, 'workspaces', workspaceId), {
-      projects,
-      updatedAt: new Date().toISOString(),
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Real-time subscription — fires immediately with current data, then on every change.
-// onData(projects[]) — called with current array
-// onError()         — called if Firestore is unavailable
-// Returns an unsubscribe function to call on cleanup.
+// Real-time subscription.
+// onData(projects[], writeId | null) — fires immediately with current data, then on every change.
+// onError()                          — fires if Firestore is unavailable.
+// Returns an unsubscribe function.
 export function subscribeToProjects(workspaceId, onData, onError) {
   if (!db) { onError?.(); return () => {}; }
   return onSnapshot(
     doc(db, 'workspaces', workspaceId),
-    (snap) => onData(snap.exists() ? (snap.data().projects ?? []) : []),
+    (snap) => {
+      if (!snap.exists()) { onData([], null); return; }
+      const d = snap.data();
+      onData(d.projects ?? [], d.writeId ?? null);
+    },
     () => onError?.(),
   );
 }

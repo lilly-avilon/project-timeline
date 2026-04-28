@@ -76,3 +76,10 @@ input[type="number"]::-webkit-outer-spin-button {
   to { opacity: 1; transform: translateY(0); }
 }
 .issues-content { animation: expandDown 0.15s ease; }
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+.skeleton { animation: shimmer 1.6s ease-in-out infinite; }

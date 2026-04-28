@@ -28,11 +28,16 @@ export default function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [loading, setLoading]           = useState(true);
   const [activeFilter, setActiveFilter] = useState('all');
-  const unsubRef = useRef(null);
+  const unsubRef       = useRef(null);
+  const lastWriteIdRef = useRef(null); // echo suppression: stores writeId of our last save
+  const isSharedRef    = useRef(false); // true when viewing a ?ws= shared link
 
   useEffect(() => {
     async function init() {
-      // Path 1: URL-encoded snapshot (?data=...) — works without Firestore
+      const sharedWsId = getWorkspaceIdFromUrl();
+      isSharedRef.current = !!sharedWsId;
+
+      // Path 1: URL-encoded snapshot (?data=...) — static, no Firestore needed
       const snapshotData = decodeProjectsFromUrl();
       if (snapshotData) {
         setViewOnly(true);
@@ -41,48 +46,51 @@ export default function App() {
         return;
       }
 
-      const sharedWsId = getWorkspaceIdFromUrl();
-
-      // Path 2 & 3 share the same logic: subscribe to a workspace and allow edits.
-      // ?ws= links give full collaborative access (not read-only).
-      const wsId = sharedWsId ?? getWorkspaceId();
+      const wsId    = sharedWsId ?? getWorkspaceId();
       const isShared = !!sharedWsId;
       setWorkspaceId(wsId);
 
-      // For shared links: show a "shared workspace" notice but still allow edits
-      if (isShared) setViewOnly(false);
-
       if (!hasBackend) {
-        // No Firebase keys — localStorage only (own workspace only)
         if (!isShared) setProjects(loadProjects().map(migrateProject));
         setLoading(false);
         return;
       }
 
       if (!isShared) {
-        // Paint own localStorage content immediately, then sync from Firestore
+        // Own workspace: show localStorage content instantly, Firestore syncs in background
         setProjects(loadProjects().map(migrateProject));
         setLoading(false);
       }
 
-      // Subscribe for real-time updates — fires immediately with current data,
-      // then any time anyone (owner or friend) saves a change
       unsubRef.current = subscribeToProjects(
         wsId,
-        async (data) => {
+        async (data, incomingWriteId) => {
           setBackendReady(true);
-          if (data.length > 0) {
-            setProjects(data.map(migrateProject));
-          } else if (!isShared) {
-            // Firestore empty on own workspace — push local data up once
-            const local = loadProjects().map(migrateProject);
-            if (local.length > 0) {
-              await saveProjectsToDB(wsId, local);
+
+          // Suppress echo of our own save — we already updated state optimistically
+          const isEcho = incomingWriteId !== null && incomingWriteId === lastWriteIdRef.current;
+          lastWriteIdRef.current = null;
+
+          if (!isEcho) {
+            // Only update state if Firestore has data, or this is a shared workspace
+            // (avoids wiping localStorage content when Firestore doc is empty on own workspace)
+            if (data.length > 0 || isShared) {
+              setProjects(data.map(migrateProject));
             }
           }
+
+          // First-time migration: own workspace, Firestore empty, localStorage has data
+          if (!isShared && data.length === 0) {
+            const local = loadProjects().map(migrateProject);
+            if (local.length > 0) {
+              const wid = await saveProjectsToDB(wsId, local);
+              if (wid) lastWriteIdRef.current = wid; // suppress migration echo
+            }
+          }
+
           setLoading(false);
         },
-        () => setLoading(false), // Firestore unavailable
+        () => setLoading(false),
       );
     }
 
@@ -92,10 +100,14 @@ export default function App() {
   }, []);
 
   const persist = useCallback(async (updated) => {
-    setProjects(updated);
+    setProjects(updated); // optimistic update — UI responds immediately
     if (backendReady && workspaceId) {
-      const saved = await saveProjectsToDB(workspaceId, updated);
-      if (!saved) saveProjects(updated);
+      const writeId = await saveProjectsToDB(workspaceId, updated);
+      if (writeId) {
+        lastWriteIdRef.current = writeId; // tell onSnapshot to skip this echo
+      } else {
+        saveProjects(updated); // cloud write failed, keep it in localStorage
+      }
     } else {
       saveProjects(updated);
     }
@@ -142,12 +154,20 @@ export default function App() {
 
   if (loading) {
     return (
-      <div style={{
-        minHeight: '100vh', backgroundColor: theme.bg,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        transition: 'background-color 0.2s',
-      }}>
-        <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
+      <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
+        {isSharedRef.current && <Header onAdd={null} />}
+        <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
+          {isSharedRef.current
+            ? <SkeletonGrid theme={theme} />
+            : (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh',
+              }}>
+                <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
+              </div>
+            )
+          }
+        </main>
       </div>
     );
   }
@@ -177,7 +197,7 @@ export default function App() {
         )}
 
         {/* Collaborative shared workspace banner — shown for ?ws= links */}
-        {!viewOnly && !!getWorkspaceIdFromUrl() && (
+        {!viewOnly && isSharedRef.current && (
           <div style={{
             marginBottom: 20,
             display: 'flex', alignItems: 'center', gap: 10,
@@ -259,6 +279,34 @@ export default function App() {
           onClose={() => { setFormOpen(false); setEditTarget(null); }}
         />
       )}
+    </div>
+  );
+}
+
+function SkeletonGrid({ theme }) {
+  const slab = (w, h, extra = {}) => ({
+    height: h, borderRadius: 6, background: theme.divider, width: w, ...extra,
+  });
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))', gap: 16 }}>
+      {[0, 1, 2, 3].map(i => (
+        <div key={i} className="skeleton" style={{
+          background: theme.card, borderRadius: 16,
+          borderLeft: `5px solid ${theme.divider}`,
+          boxShadow: theme.cardShadow,
+          padding: '18px 20px 20px',
+          display: 'flex', flexDirection: 'column', gap: 10,
+        }}>
+          <div style={slab('65%', 14)} />
+          <div style={slab('40%', 10, { marginTop: 2 })} />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
+            <div style={slab('100%', 80, { borderRadius: 12 })} />
+            <div style={slab('100%', 80, { borderRadius: 12 })} />
+          </div>
+          <div style={slab('55%', 11, { marginTop: 4 })} />
+          <div style={slab('45%', 11)} />
+        </div>
+      ))}
     </div>
   );
 }
