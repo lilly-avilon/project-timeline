@@ -7,6 +7,7 @@ import Header from './components/Header';
 import ProjectCard from './components/ProjectCard';
 import ProjectForm from './components/ProjectForm';
 import ShareButton from './components/ShareButton';
+import FilterTabs from './components/FilterTabs';
 
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -26,6 +27,7 @@ export default function App() {
   const [workspaceId, setWorkspaceId]   = useState(null);
   const [backendReady, setBackendReady] = useState(false);
   const [loading, setLoading]           = useState(true);
+  const [activeFilter, setActiveFilter] = useState('all');
 
   useEffect(() => {
     async function init() {
@@ -107,6 +109,21 @@ export default function App() {
     return acc;
   }, {});
 
+  const FILTER_LEVELS = {
+    overdue:  ['overdue'],
+    critical: ['red'],
+    moderate: ['orange'],
+    ontrack:  ['yellow', 'green'],
+  };
+
+  const filtered = activeFilter === 'all'
+    ? sorted
+    : sorted.filter(p =>
+        FILTER_LEVELS[activeFilter].includes(
+          getUrgencyLevel(getTotalDaysLeft(p.deadline))
+        )
+      );
+
   if (loading) {
     return (
       <div style={{
@@ -160,26 +177,45 @@ export default function App() {
           </div>
         )}
 
+        {/* Filter tabs — only show when there are projects */}
+        {projects.length > 0 && (
+          <FilterTabs
+            counts={counts}
+            total={projects.length}
+            active={activeFilter}
+            onChange={setActiveFilter}
+          />
+        )}
+
         {/* Grid or empty */}
         {projects.length === 0
           ? <EmptyState onAdd={handleAdd} viewOnly={viewOnly} theme={theme} />
-          : (
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))',
-              gap: 16,
-            }}>
-              {sorted.map(p => (
-                <ProjectCard
-                  key={p.id}
-                  project={p}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  readOnly={viewOnly}
-                />
-              ))}
-            </div>
-          )
+          : filtered.length === 0
+            ? (
+              <div style={{
+                textAlign: 'center', padding: '60px 24px',
+                fontSize: 14, color: theme.text3, fontWeight: 500,
+              }}>
+                No projects in this category.
+              </div>
+            )
+            : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))',
+                gap: 16,
+              }}>
+                {filtered.map(p => (
+                  <ProjectCard
+                    key={p.id}
+                    project={p}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    readOnly={viewOnly}
+                  />
+                ))}
+              </div>
+            )
         }
       </main>
 
