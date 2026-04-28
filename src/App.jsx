@@ -31,36 +31,43 @@ export default function App() {
     async function init() {
       const sharedWsId = getWorkspaceIdFromUrl();
 
-      if (hasBackend) {
-        if (sharedWsId) {
-          // Viewing someone else's workspace — read-only
-          setViewOnly(true);
-          setWorkspaceId(sharedWsId);
+      if (sharedWsId) {
+        // Shared link — must wait for Firestore (no local copy of other people's workspaces)
+        setViewOnly(true);
+        setWorkspaceId(sharedWsId);
+        if (hasBackend) {
           const data = await fetchProjects(sharedWsId);
           if (data !== null) {
             setBackendReady(true);
             setProjects(data.map(migrateProject));
           }
-          // If fetch failed, show empty read-only view (Firestore not set up yet)
-        } else {
-          // Own workspace
-          const myId = getWorkspaceId();
-          setWorkspaceId(myId);
-          const data = await fetchProjects(myId);
-          if (data !== null) {
-            // Firestore is live — use it
-            setBackendReady(true);
-            setProjects(data.map(migrateProject));
-          } else {
-            // Firestore unavailable — fall back to localStorage
-            setProjects(loadProjects().map(migrateProject));
-          }
         }
-      } else {
-        // No Firebase keys — localStorage only
-        setProjects(loadProjects().map(migrateProject));
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      // Own workspace — paint localStorage content INSTANTLY, no waiting
+      const myId = getWorkspaceId();
+      setWorkspaceId(myId);
+      setProjects(loadProjects().map(migrateProject));
+      setLoading(false); // user sees content here, before Firestore responds
+
+      if (!hasBackend) return;
+
+      // Sync Firestore silently in the background
+      const remote = await fetchProjects(myId);
+      if (remote === null) return;
+
+      setBackendReady(true);
+
+      if (remote.length > 0) {
+        // Firestore has data — source of truth, update view
+        setProjects(remote.map(migrateProject));
+      } else {
+        // Firestore empty — migrate local data up once
+        const local = loadProjects().map(migrateProject);
+        if (local.length > 0) await saveProjectsToDB(myId, local);
+      }
     }
     init();
   }, []);
