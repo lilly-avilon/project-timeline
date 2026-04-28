@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { loadProjects, saveProjects, decodeProjectsFromUrl } from './utils/storage';
+import { useState, useEffect, useCallback } from 'react';
+import { loadProjects, saveProjects, getWorkspaceId, getWorkspaceIdFromUrl } from './utils/storage';
+import { fetchProjects, saveProjectsToDB, hasBackend } from './utils/database';
 import { getTotalDaysLeft, getUrgencyLevel } from './utils/countdown';
 import { useTheme } from './ThemeContext';
 import Header from './components/Header';
@@ -11,23 +12,60 @@ function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+function migrateProject(p) {
+  if (p.itemName !== undefined) return p;
+  return { ...p, itemName: 'items', itemCount: p.droneCount ?? 1 };
+}
+
 export default function App() {
   const { theme } = useTheme();
   const [projects, setProjects]     = useState([]);
   const [formOpen, setFormOpen]     = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [viewOnly, setViewOnly]     = useState(false);
+  const [workspaceId, setWorkspaceId] = useState(null);
+  const [loading, setLoading]       = useState(true);
 
   useEffect(() => {
-    const urlData = decodeProjectsFromUrl();
-    if (urlData) { setProjects(urlData); setViewOnly(true); }
-    else          { setProjects(loadProjects()); }
+    async function init() {
+      const sharedWsId = getWorkspaceIdFromUrl();
+
+      if (hasBackend) {
+        if (sharedWsId) {
+          // Viewing someone else's workspace — read-only
+          setViewOnly(true);
+          setWorkspaceId(sharedWsId);
+          const data = await fetchProjects(sharedWsId);
+          setProjects((data ?? []).map(migrateProject));
+        } else {
+          // Own workspace
+          const myId = getWorkspaceId();
+          setWorkspaceId(myId);
+          const data = await fetchProjects(myId);
+          if (data === null) {
+            setProjects(loadProjects().map(migrateProject));
+          } else {
+            setProjects(data.map(migrateProject));
+          }
+        }
+      } else {
+        // No backend — localStorage only
+        setProjects(loadProjects().map(migrateProject));
+      }
+      setLoading(false);
+    }
+    init();
   }, []);
 
-  const persist = (updated) => {
+  const persist = useCallback(async (updated) => {
     setProjects(updated);
-    if (!viewOnly) saveProjects(updated);
-  };
+    if (viewOnly) return;
+    if (hasBackend && workspaceId) {
+      await saveProjectsToDB(workspaceId, updated);
+    } else {
+      saveProjects(updated);
+    }
+  }, [viewOnly, workspaceId]);
 
   const handleSave = (form) => {
     if (editTarget) {
@@ -53,6 +91,18 @@ export default function App() {
     return acc;
   }, {});
 
+  if (loading) {
+    return (
+      <div style={{
+        minHeight: '100vh', backgroundColor: theme.bg,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        transition: 'background-color 0.2s',
+      }}>
+        <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
       <Header onAdd={viewOnly ? null : handleAdd} />
@@ -73,7 +123,7 @@ export default function App() {
               <path strokeLinecap="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
-            <span><strong>Shared view</strong> — read only. Countdowns refresh each day automatically.</span>
+            <span><strong>Shared view</strong> — read only. Data updates live whenever the owner makes changes.</span>
           </div>
         )}
 
@@ -89,7 +139,7 @@ export default function App() {
               ) : null
             )}
             <div style={{ marginLeft: 'auto' }}>
-              <ShareButton projects={projects} />
+              <ShareButton workspaceId={workspaceId} projects={projects} />
             </div>
           </div>
         )}
@@ -169,7 +219,7 @@ function EmptyState({ onAdd, viewOnly, theme }) {
       <p style={{ fontSize: 14, color: theme.text3, maxWidth: 300, lineHeight: 1.65, marginBottom: 28, transition: 'color 0.2s' }}>
         {viewOnly
           ? 'This shared dashboard has no projects to display.'
-          : 'Add your first project to start tracking deadlines, drones, and workday countdowns.'}
+          : 'Add your first project to start tracking deadlines and workday countdowns.'}
       </p>
       {!viewOnly && (
         <>

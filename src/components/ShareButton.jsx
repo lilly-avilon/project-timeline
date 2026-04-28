@@ -1,14 +1,17 @@
 import { useState } from 'react';
-import { encodeProjectsToUrl } from '../utils/storage';
+import { buildShareUrl, encodeProjectsToUrl } from '../utils/storage';
+import { hasBackend } from '../utils/database';
 import { useTheme } from '../ThemeContext';
 
-export default function ShareButton({ projects }) {
+export default function ShareButton({ workspaceId, projects }) {
   const { theme } = useTheme();
   const [copied, setCopied] = useState(false);
   const [hov, setHov] = useState(false);
 
   const handleCopy = async () => {
-    const url = encodeProjectsToUrl(projects);
+    const url = hasBackend && workspaceId
+      ? buildShareUrl(workspaceId)
+      : encodeProjectsToUrl(projects);
     try {
       await navigator.clipboard.writeText(url);
     } catch {

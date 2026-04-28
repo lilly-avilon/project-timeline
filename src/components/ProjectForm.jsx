@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTheme } from '../ThemeContext';
 
-const EMPTY = { name: '', deadline: '', responsible: '', droneCount: 1, issues: '' };
+const EMPTY = { name: '', deadline: '', responsible: '', itemName: '', itemCount: 1, issues: '' };
 
 export default function ProjectForm({ project, onSave, onClose }) {
   const { theme } = useTheme();
@@ -23,7 +23,8 @@ export default function ProjectForm({ project, onSave, onClose }) {
     if (!form.name.trim())        e.name       = 'Required';
     if (!form.deadline)           e.deadline    = 'Required';
     if (!form.responsible.trim()) e.responsible = 'Required';
-    if (!form.droneCount || form.droneCount < 1) e.droneCount = 'Min 1';
+    if (!form.itemName.trim())               e.itemName  = 'Required';
+    if (!form.itemCount || form.itemCount < 1) e.itemCount = 'Min 1';
     return e;
   };
 
@@ -107,14 +108,22 @@ export default function ProjectForm({ project, onSave, onClose }) {
             <input type="date" value={form.deadline} onChange={e => set('deadline', e.target.value)} style={inp(!!errors.deadline)} />
           </Field>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Field label="Responsible" required error={errors.responsible} theme={theme}>
-              <input type="text" value={form.responsible} onChange={e => set('responsible', e.target.value)}
-                placeholder="Name" style={inp(!!errors.responsible)} />
+          <Field label="Responsible" required error={errors.responsible} theme={theme}>
+            <input type="text" value={form.responsible} onChange={e => set('responsible', e.target.value)}
+              placeholder="Name" style={inp(!!errors.responsible)} />
+          </Field>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
+            <Field label="Item Name" required error={errors.itemName} theme={theme}>
+              <input type="text" value={form.itemName} onChange={e => set('itemName', e.target.value)}
+                placeholder="e.g. Phantom 4 Pro" style={inp(!!errors.itemName)} />
             </Field>
-            <Field label="Items to Send" required error={errors.droneCount} theme={theme}>
-              <input type="number" min={1} value={form.droneCount}
-                onChange={e => set('droneCount', parseInt(e.target.value) || '')} style={inp(!!errors.droneCount)} />
+            <Field label="Qty to Send" required error={errors.itemCount} theme={theme}>
+              <input type="number" min={1} value={form.itemCount}
+                onChange={e => {
+                  const n = parseInt(e.target.value, 10);
+                  set('itemCount', isNaN(n) ? '' : n);
+                }} style={inp(!!errors.itemCount)} />
             </Field>
           </div>
 
