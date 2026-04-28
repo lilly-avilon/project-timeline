@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useSyncExternalStore } from 'react';
 import { useTheme } from '../ThemeContext';
 
 const EMPTY = { name: '', deadline: '', responsible: '', itemName: '', itemCount: 1, issues: '' };
@@ -48,7 +48,10 @@ export default function ProjectForm({ project, onSave, onClose }) {
     transition: 'border-color 0.15s, background 0.2s, color 0.2s',
   });
 
-  const desktop = window.innerWidth >= 640;
+  const desktop = useSyncExternalStore(
+    cb => { window.addEventListener('resize', cb); return () => window.removeEventListener('resize', cb); },
+    () => window.innerWidth >= 640,
+  );
 
   return (
     <div

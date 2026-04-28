@@ -13,7 +13,7 @@ export function saveProjects(projects) {
   localStorage.setItem(KEY, JSON.stringify(projects));
 }
 
-// ── Workspace ID (for Supabase backend) ───────────────────────
+// ── Workspace ID ──────────────────────────────────────────────
 export function getWorkspaceId() {
   let id = localStorage.getItem(WS_KEY);
   if (!id) {

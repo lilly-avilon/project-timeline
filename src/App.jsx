@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { loadProjects, saveProjects, getWorkspaceId, getWorkspaceIdFromUrl, decodeProjectsFromUrl } from './utils/storage';
-import { saveProjectsToDB, hasBackend, subscribeToProjects } from './utils/database';
+import { useState } from 'react';
+import { useWorkspace } from './hooks/useWorkspace';
 import { getTotalDaysLeft, getUrgencyLevel } from './utils/countdown';
 import { useTheme } from './ThemeContext';
 import Header from './components/Header';
@@ -9,116 +8,35 @@ import ProjectForm from './components/ProjectForm';
 import ShareButton from './components/ShareButton';
 import FilterTabs from './components/FilterTabs';
 
+// Module-level constant — not recreated on every render
+const FILTER_MAP = {
+  all:      null,
+  overdue:  ['overdue'],
+  critical: ['red'],
+  moderate: ['orange'],
+  ontrack:  ['yellow', 'green'],
+};
+
 function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function migrateProject(p) {
-  if (p.itemName !== undefined) return p;
-  return { ...p, itemName: 'items', itemCount: p.droneCount ?? 1 };
-}
-
 export default function App() {
   const { theme } = useTheme();
-  const [projects, setProjects]     = useState([]);
-  const [formOpen, setFormOpen]     = useState(false);
-  const [editTarget, setEditTarget] = useState(null);
-  const [viewOnly, setViewOnly]         = useState(false);
-  const [workspaceId, setWorkspaceId]   = useState(null);
-  const [backendReady, setBackendReady] = useState(false);
-  const [loading, setLoading]           = useState(true);
+  const {
+    projects, loading, backendReady,
+    workspaceId, viewOnly, isSharedRef, persist,
+  } = useWorkspace();
+
+  const [formOpen, setFormOpen]         = useState(false);
+  const [editTarget, setEditTarget]     = useState(null);
   const [activeFilter, setActiveFilter] = useState('all');
-  const unsubRef       = useRef(null);
-  const lastWriteIdRef = useRef(null); // echo suppression: stores writeId of our last save
-  const isSharedRef    = useRef(false); // true when viewing a ?ws= shared link
-
-  useEffect(() => {
-    async function init() {
-      const sharedWsId = getWorkspaceIdFromUrl();
-      isSharedRef.current = !!sharedWsId;
-
-      // Path 1: URL-encoded snapshot (?data=...) — static, no Firestore needed
-      const snapshotData = decodeProjectsFromUrl();
-      if (snapshotData) {
-        setViewOnly(true);
-        setProjects(snapshotData.map(migrateProject));
-        setLoading(false);
-        return;
-      }
-
-      const wsId    = sharedWsId ?? getWorkspaceId();
-      const isShared = !!sharedWsId;
-      setWorkspaceId(wsId);
-
-      if (!hasBackend) {
-        if (!isShared) setProjects(loadProjects().map(migrateProject));
-        setLoading(false);
-        return;
-      }
-
-      if (!isShared) {
-        // Own workspace: show localStorage content instantly, Firestore syncs in background
-        setProjects(loadProjects().map(migrateProject));
-        setLoading(false);
-      }
-
-      unsubRef.current = subscribeToProjects(
-        wsId,
-        async (data, incomingWriteId) => {
-          setBackendReady(true);
-
-          // Suppress echo of our own save — we already updated state optimistically
-          const isEcho = incomingWriteId !== null && incomingWriteId === lastWriteIdRef.current;
-          lastWriteIdRef.current = null;
-
-          if (!isEcho) {
-            // Only update state if Firestore has data, or this is a shared workspace
-            // (avoids wiping localStorage content when Firestore doc is empty on own workspace)
-            if (data.length > 0 || isShared) {
-              setProjects(data.map(migrateProject));
-            }
-          }
-
-          // First-time migration: own workspace, Firestore empty, localStorage has data
-          if (!isShared && data.length === 0) {
-            const local = loadProjects().map(migrateProject);
-            if (local.length > 0) {
-              const wid = await saveProjectsToDB(wsId, local);
-              if (wid) lastWriteIdRef.current = wid; // suppress migration echo
-            }
-          }
-
-          setLoading(false);
-        },
-        () => setLoading(false),
-      );
-    }
-
-    init();
-
-    return () => { if (unsubRef.current) unsubRef.current(); };
-  }, []);
-
-  const persist = useCallback(async (updated) => {
-    setProjects(updated); // optimistic update — UI responds immediately
-    if (backendReady && workspaceId) {
-      const writeId = await saveProjectsToDB(workspaceId, updated);
-      if (writeId) {
-        lastWriteIdRef.current = writeId; // tell onSnapshot to skip this echo
-      } else {
-        saveProjects(updated); // cloud write failed, keep it in localStorage
-      }
-    } else {
-      saveProjects(updated);
-    }
-  }, [backendReady, workspaceId]);
 
   const handleSave = (form) => {
-    if (editTarget) {
-      persist(projects.map(p => p.id === editTarget.id ? { ...form, id: editTarget.id } : p));
-    } else {
-      persist([...projects, { ...form, id: generateId(), createdAt: new Date().toISOString().slice(0, 10) }]);
-    }
+    persist(editTarget
+      ? projects.map(p => p.id === editTarget.id ? { ...form, id: editTarget.id } : p)
+      : [...projects, { ...form, id: generateId(), createdAt: new Date().toISOString().slice(0, 10) }]
+    );
     setFormOpen(false);
     setEditTarget(null);
   };
@@ -137,21 +55,12 @@ export default function App() {
     return acc;
   }, {});
 
-  const FILTER_LEVELS = {
-    overdue:  ['overdue'],
-    critical: ['red'],
-    moderate: ['orange'],
-    ontrack:  ['yellow', 'green'],
-  };
+  const filterLevels = FILTER_MAP[activeFilter];
+  const filtered = filterLevels
+    ? sorted.filter(p => filterLevels.includes(getUrgencyLevel(getTotalDaysLeft(p.deadline))))
+    : sorted;
 
-  const filtered = activeFilter === 'all'
-    ? sorted
-    : sorted.filter(p =>
-        FILTER_LEVELS[activeFilter].includes(
-          getUrgencyLevel(getTotalDaysLeft(p.deadline))
-        )
-      );
-
+  // ── Loading state ──────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
@@ -160,9 +69,7 @@ export default function App() {
           {isSharedRef.current
             ? <SkeletonGrid theme={theme} />
             : (
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh',
-              }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
                 <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
               </div>
             )
@@ -172,57 +79,43 @@ export default function App() {
     );
   }
 
+  // ── Main render ────────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
       <Header onAdd={viewOnly ? null : handleAdd} />
 
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
 
-        {/* Shared-view banner (URL snapshot — truly read-only) */}
+        {/* Static snapshot banner (?data= links) */}
         {viewOnly && (
-          <div style={{
-            marginBottom: 20,
-            display: 'flex', alignItems: 'center', gap: 10,
-            background: 'rgba(99,102,241,0.1)',
-            border: '1.5px solid rgba(99,102,241,0.25)',
-            borderRadius: 12, padding: '12px 16px',
-            fontSize: 13, fontWeight: 500, color: '#818cf8',
-          }}>
-            <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
-              <path strokeLinecap="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
-              <circle cx="12" cy="12" r="3" />
-            </svg>
-            <span><strong>Snapshot view</strong> — this is a static copy. Ask for a live link to see real-time data.</span>
-          </div>
+          <Banner
+            color="#818cf8"
+            bg="rgba(99,102,241,0.1)"
+            border="rgba(99,102,241,0.25)"
+            icon={<EyeIcon />}
+            text={<><strong>Snapshot view</strong> — static copy. Ask the owner for a live link.</>}
+          />
         )}
 
-        {/* Collaborative shared workspace banner — shown for ?ws= links */}
+        {/* Collaborative workspace banner (?ws= links) */}
         {!viewOnly && isSharedRef.current && (
-          <div style={{
-            marginBottom: 20,
-            display: 'flex', alignItems: 'center', gap: 10,
-            background: 'rgba(5,150,105,0.08)',
-            border: '1.5px solid rgba(5,150,105,0.2)',
-            borderRadius: 12, padding: '12px 16px',
-            fontSize: 13, fontWeight: 500, color: '#059669',
-          }}>
-            <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
-            </svg>
-            <span><strong>Shared workspace</strong> — live sync. Everyone with this link can add and edit projects.</span>
-          </div>
+          <Banner
+            color="#059669"
+            bg="rgba(5,150,105,0.08)"
+            border="rgba(5,150,105,0.2)"
+            icon={<PeopleIcon />}
+            text={<><strong>Shared workspace</strong> — live sync. Everyone with this link can add and edit.</>}
+          />
         )}
 
-        {/* Summary bar */}
+        {/* Summary bar + Share */}
         {projects.length > 0 && (
           <div style={{ marginBottom: 20, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 13, color: theme.summaryText, fontWeight: 600, marginRight: 4, transition: 'color 0.2s' }}>
               {projects.length} project{projects.length !== 1 ? 's' : ''}
             </span>
             {['overdue', 'red', 'orange', 'yellow', 'green'].map(lv =>
-              counts[lv] ? (
-                <StatusPill key={lv} count={counts[lv]} u={theme.urgency[lv]} />
-              ) : null
+              counts[lv] ? <StatusPill key={lv} count={counts[lv]} u={theme.urgency[lv]} /> : null
             )}
             <div style={{ marginLeft: 'auto' }}>
               <ShareButton workspaceId={backendReady ? workspaceId : null} projects={projects} />
@@ -230,42 +123,24 @@ export default function App() {
           </div>
         )}
 
-        {/* Filter tabs — only show when there are projects */}
+        {/* Filter tabs */}
         {projects.length > 0 && (
-          <FilterTabs
-            counts={counts}
-            total={projects.length}
-            active={activeFilter}
-            onChange={setActiveFilter}
-          />
+          <FilterTabs counts={counts} total={projects.length} active={activeFilter} onChange={setActiveFilter} />
         )}
 
-        {/* Grid or empty */}
+        {/* Project grid */}
         {projects.length === 0
           ? <EmptyState onAdd={handleAdd} viewOnly={viewOnly} theme={theme} />
           : filtered.length === 0
             ? (
-              <div style={{
-                textAlign: 'center', padding: '60px 24px',
-                fontSize: 14, color: theme.text3, fontWeight: 500,
-              }}>
+              <div style={{ textAlign: 'center', padding: '60px 24px', fontSize: 14, color: theme.text3, fontWeight: 500 }}>
                 No projects in this category.
               </div>
             )
             : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))',
-                gap: 16,
-              }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))', gap: 16 }}>
                 {filtered.map(p => (
-                  <ProjectCard
-                    key={p.id}
-                    project={p}
-                    onEdit={handleEdit}
-                    onDelete={handleDelete}
-                    readOnly={viewOnly}
-                  />
+                  <ProjectCard key={p.id} project={p} onEdit={handleEdit} onDelete={handleDelete} readOnly={viewOnly} />
                 ))}
               </div>
             )
@@ -279,6 +154,24 @@ export default function App() {
           onClose={() => { setFormOpen(false); setEditTarget(null); }}
         />
       )}
+    </div>
+  );
+}
+
+// ── Sub-components ─────────────────────────────────────────────────────────
+
+function Banner({ color, bg, border, icon, text }) {
+  return (
+    <div style={{
+      marginBottom: 20,
+      display: 'flex', alignItems: 'center', gap: 10,
+      background: bg,
+      border: `1.5px solid ${border}`,
+      borderRadius: 12, padding: '12px 16px',
+      fontSize: 13, fontWeight: 500, color,
+    }}>
+      <span style={{ flexShrink: 0, display: 'flex' }}>{icon}</span>
+      <span>{text}</span>
     </div>
   );
 }
@@ -329,10 +222,7 @@ function StatusPill({ count, u }) {
 function EmptyState({ onAdd, viewOnly, theme }) {
   const [hov, setHov] = useState(false);
   return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      justifyContent: 'center', padding: '80px 24px', textAlign: 'center',
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 24px', textAlign: 'center' }}>
       <div style={{
         width: 72, height: 72, borderRadius: 20,
         background: 'linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(99,102,241,0.08) 100%)',
@@ -382,5 +272,24 @@ function EmptyState({ onAdd, viewOnly, theme }) {
         </>
       )}
     </div>
+  );
+}
+
+// ── Icons ──────────────────────────────────────────────────────────────────
+
+function EyeIcon() {
+  return (
+    <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+      <path strokeLinecap="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function PeopleIcon() {
+  return (
+    <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+    </svg>
   );
 }

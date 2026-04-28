@@ -35,17 +35,18 @@ if (apiKey && projectId) {
 
 export const hasBackend = !!db;
 
-// Returns a unique writeId string on success (for echo suppression), null on failure.
-export async function saveProjectsToDB(workspaceId, projects) {
+// Returns the writeId used on success (for echo suppression), null on failure.
+// Pass a pre-generated writeId when you need to set the ref BEFORE the await.
+export async function saveProjectsToDB(workspaceId, projects, writeId) {
   if (!db) return null;
+  const wid = writeId ?? (Math.random().toString(36).slice(2) + Date.now().toString(36));
   try {
-    const writeId = Math.random().toString(36).slice(2) + Date.now().toString(36);
     await setDoc(doc(db, 'workspaces', workspaceId), {
       projects,
       updatedAt: new Date().toISOString(),
-      writeId,
+      writeId: wid,
     });
-    return writeId;
+    return wid;
   } catch {
     return null;
   }
