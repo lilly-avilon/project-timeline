@@ -1,29 +1,36 @@
-import { createClient } from '@supabase/supabase-js';
+import { initializeApp } from 'firebase/app';
+import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const apiKey     = import.meta.env.VITE_FIREBASE_API_KEY;
+const projectId  = import.meta.env.VITE_FIREBASE_PROJECT_ID;
 
-export const supabase = supabaseUrl && supabaseKey
-  ? createClient(supabaseUrl, supabaseKey)
+const app = apiKey && projectId
+  ? initializeApp({
+      apiKey,
+      authDomain:  `${projectId}.firebaseapp.com`,
+      projectId,
+    })
   : null;
 
-export const hasBackend = !!supabase;
+const db = app ? getFirestore(app) : null;
+
+export const hasBackend = !!db;
 
 export async function fetchProjects(workspaceId) {
-  if (!supabase) return null;
-  const { data, error } = await supabase
-    .from('workspaces')
-    .select('projects')
-    .eq('id', workspaceId)
-    .single();
-  if (error) return [];
-  return data?.projects ?? [];
+  if (!db) return null;
+  try {
+    const snap = await getDoc(doc(db, 'workspaces', workspaceId));
+    return snap.exists() ? (snap.data().projects ?? []) : [];
+  } catch { return null; }
 }
 
 export async function saveProjectsToDB(workspaceId, projects) {
-  if (!supabase) return false;
-  const { error } = await supabase
-    .from('workspaces')
-    .upsert({ id: workspaceId, projects, updated_at: new Date().toISOString() });
-  return !error;
+  if (!db) return false;
+  try {
+    await setDoc(doc(db, 'workspaces', workspaceId), {
+      projects,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  } catch { return false; }
 }
