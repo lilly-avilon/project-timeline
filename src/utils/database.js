@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore, doc, getDoc, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 
 const apiKey    = import.meta.env.VITE_FIREBASE_API_KEY;
 const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
@@ -37,4 +37,17 @@ export async function saveProjectsToDB(workspaceId, projects) {
   } catch {
     return false;
   }
+}
+
+// Real-time subscription — fires immediately with current data, then on every change.
+// onData(projects[]) — called with current array
+// onError()         — called if Firestore is unavailable
+// Returns an unsubscribe function to call on cleanup.
+export function subscribeToProjects(workspaceId, onData, onError) {
+  if (!db) { onError?.(); return () => {}; }
+  return onSnapshot(
+    doc(db, 'workspaces', workspaceId),
+    (snap) => onData(snap.exists() ? (snap.data().projects ?? []) : []),
+    () => onError?.(),
+  );
 }

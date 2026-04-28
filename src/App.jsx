@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
-import { loadProjects, saveProjects, getWorkspaceId, getWorkspaceIdFromUrl } from './utils/storage';
-import { fetchProjects, saveProjectsToDB, hasBackend } from './utils/database';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { loadProjects, saveProjects, getWorkspaceId, getWorkspaceIdFromUrl, decodeProjectsFromUrl } from './utils/storage';
+import { saveProjectsToDB, hasBackend, subscribeToProjects } from './utils/database';
 import { getTotalDaysLeft, getUrgencyLevel } from './utils/countdown';
 import { useTheme } from './ThemeContext';
 import Header from './components/Header';
@@ -28,62 +28,78 @@ export default function App() {
   const [backendReady, setBackendReady] = useState(false);
   const [loading, setLoading]           = useState(true);
   const [activeFilter, setActiveFilter] = useState('all');
+  const unsubRef = useRef(null);
 
   useEffect(() => {
     async function init() {
-      const sharedWsId = getWorkspaceIdFromUrl();
-
-      if (sharedWsId) {
-        // Shared link — must wait for Firestore (no local copy of other people's workspaces)
+      // Path 1: URL-encoded snapshot (?data=...) — works without Firestore
+      const snapshotData = decodeProjectsFromUrl();
+      if (snapshotData) {
         setViewOnly(true);
-        setWorkspaceId(sharedWsId);
-        if (hasBackend) {
-          const data = await fetchProjects(sharedWsId);
-          if (data !== null) {
-            setBackendReady(true);
-            setProjects(data.map(migrateProject));
-          }
-        }
+        setProjects(snapshotData.map(migrateProject));
         setLoading(false);
         return;
       }
 
-      // Own workspace — paint localStorage content INSTANTLY, no waiting
-      const myId = getWorkspaceId();
-      setWorkspaceId(myId);
-      setProjects(loadProjects().map(migrateProject));
-      setLoading(false); // user sees content here, before Firestore responds
+      const sharedWsId = getWorkspaceIdFromUrl();
 
-      if (!hasBackend) return;
+      // Path 2 & 3 share the same logic: subscribe to a workspace and allow edits.
+      // ?ws= links give full collaborative access (not read-only).
+      const wsId = sharedWsId ?? getWorkspaceId();
+      const isShared = !!sharedWsId;
+      setWorkspaceId(wsId);
 
-      // Sync Firestore silently in the background
-      const remote = await fetchProjects(myId);
-      if (remote === null) return;
+      // For shared links: show a "shared workspace" notice but still allow edits
+      if (isShared) setViewOnly(false);
 
-      setBackendReady(true);
-
-      if (remote.length > 0) {
-        // Firestore has data — source of truth, update view
-        setProjects(remote.map(migrateProject));
-      } else {
-        // Firestore empty — migrate local data up once
-        const local = loadProjects().map(migrateProject);
-        if (local.length > 0) await saveProjectsToDB(myId, local);
+      if (!hasBackend) {
+        // No Firebase keys — localStorage only (own workspace only)
+        if (!isShared) setProjects(loadProjects().map(migrateProject));
+        setLoading(false);
+        return;
       }
+
+      if (!isShared) {
+        // Paint own localStorage content immediately, then sync from Firestore
+        setProjects(loadProjects().map(migrateProject));
+        setLoading(false);
+      }
+
+      // Subscribe for real-time updates — fires immediately with current data,
+      // then any time anyone (owner or friend) saves a change
+      unsubRef.current = subscribeToProjects(
+        wsId,
+        async (data) => {
+          setBackendReady(true);
+          if (data.length > 0) {
+            setProjects(data.map(migrateProject));
+          } else if (!isShared) {
+            // Firestore empty on own workspace — push local data up once
+            const local = loadProjects().map(migrateProject);
+            if (local.length > 0) {
+              await saveProjectsToDB(wsId, local);
+            }
+          }
+          setLoading(false);
+        },
+        () => setLoading(false), // Firestore unavailable
+      );
     }
+
     init();
+
+    return () => { if (unsubRef.current) unsubRef.current(); };
   }, []);
 
   const persist = useCallback(async (updated) => {
     setProjects(updated);
-    if (viewOnly) return;
     if (backendReady && workspaceId) {
       const saved = await saveProjectsToDB(workspaceId, updated);
-      if (!saved) saveProjects(updated); // safety net: always persist locally if cloud fails
+      if (!saved) saveProjects(updated);
     } else {
       saveProjects(updated);
     }
-  }, [viewOnly, backendReady, workspaceId]);
+  }, [backendReady, workspaceId]);
 
   const handleSave = (form) => {
     if (editTarget) {
@@ -142,7 +158,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
 
-        {/* Shared-view banner */}
+        {/* Shared-view banner (URL snapshot — truly read-only) */}
         {viewOnly && (
           <div style={{
             marginBottom: 20,
@@ -156,7 +172,24 @@ export default function App() {
               <path strokeLinecap="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
-            <span><strong>Shared view</strong> — read only. Data updates live whenever the owner makes changes.</span>
+            <span><strong>Snapshot view</strong> — this is a static copy. Ask for a live link to see real-time data.</span>
+          </div>
+        )}
+
+        {/* Collaborative shared workspace banner — shown for ?ws= links */}
+        {!viewOnly && !!getWorkspaceIdFromUrl() && (
+          <div style={{
+            marginBottom: 20,
+            display: 'flex', alignItems: 'center', gap: 10,
+            background: 'rgba(5,150,105,0.08)',
+            border: '1.5px solid rgba(5,150,105,0.2)',
+            borderRadius: 12, padding: '12px 16px',
+            fontSize: 13, fontWeight: 500, color: '#059669',
+          }}>
+            <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+            </svg>
+            <span><strong>Shared workspace</strong> — live sync. Everyone with this link can add and edit projects.</span>
           </div>
         )}
 
