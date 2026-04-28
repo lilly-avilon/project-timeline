@@ -77,7 +77,7 @@ export default function ProjectCard({ project, onEdit, onDelete, readOnly }) {
       {/* ── Meta ── */}
       <div style={{ padding: '12px 20px', borderTop: `1px solid ${theme.divider}`, display: 'flex', flexDirection: 'column', gap: 8, transition: 'border-color 0.2s' }}>
         <MetaRow icon={<PersonIcon color={theme.text3} />} text={project.responsible} theme={theme} />
-        <MetaRow icon={<DroneIcon color={theme.text3} />} text={`${project.droneCount} drone${project.droneCount !== 1 ? 's' : ''}`} theme={theme} />
+        <MetaRow icon={<DroneIcon color={theme.text3} />} text={`${project.droneCount} item${project.droneCount !== 1 ? 's' : ''} to send`} theme={theme} />
       </div>
 
       {/* ── Issues ── */}

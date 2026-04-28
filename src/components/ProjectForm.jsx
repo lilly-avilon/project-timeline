@@ -112,7 +112,7 @@ export default function ProjectForm({ project, onSave, onClose }) {
               <input type="text" value={form.responsible} onChange={e => set('responsible', e.target.value)}
                 placeholder="Name" style={inp(!!errors.responsible)} />
             </Field>
-            <Field label="Drones" required error={errors.droneCount} theme={theme}>
+            <Field label="Items to Send" required error={errors.droneCount} theme={theme}>
               <input type="number" min={1} value={form.droneCount}
                 onChange={e => set('droneCount', parseInt(e.target.value) || '')} style={inp(!!errors.droneCount)} />
             </Field>
