@@ -22,9 +22,10 @@ export default function App() {
   const [projects, setProjects]     = useState([]);
   const [formOpen, setFormOpen]     = useState(false);
   const [editTarget, setEditTarget] = useState(null);
-  const [viewOnly, setViewOnly]     = useState(false);
-  const [workspaceId, setWorkspaceId] = useState(null);
-  const [loading, setLoading]       = useState(true);
+  const [viewOnly, setViewOnly]         = useState(false);
+  const [workspaceId, setWorkspaceId]   = useState(null);
+  const [backendReady, setBackendReady] = useState(false);
+  const [loading, setLoading]           = useState(true);
 
   useEffect(() => {
     async function init() {
@@ -36,20 +37,27 @@ export default function App() {
           setViewOnly(true);
           setWorkspaceId(sharedWsId);
           const data = await fetchProjects(sharedWsId);
-          setProjects((data ?? []).map(migrateProject));
+          if (data !== null) {
+            setBackendReady(true);
+            setProjects(data.map(migrateProject));
+          }
+          // If fetch failed, show empty read-only view (Firestore not set up yet)
         } else {
           // Own workspace
           const myId = getWorkspaceId();
           setWorkspaceId(myId);
           const data = await fetchProjects(myId);
-          if (data === null) {
-            setProjects(loadProjects().map(migrateProject));
-          } else {
+          if (data !== null) {
+            // Firestore is live — use it
+            setBackendReady(true);
             setProjects(data.map(migrateProject));
+          } else {
+            // Firestore unavailable — fall back to localStorage
+            setProjects(loadProjects().map(migrateProject));
           }
         }
       } else {
-        // No backend — localStorage only
+        // No Firebase keys — localStorage only
         setProjects(loadProjects().map(migrateProject));
       }
       setLoading(false);
@@ -60,12 +68,13 @@ export default function App() {
   const persist = useCallback(async (updated) => {
     setProjects(updated);
     if (viewOnly) return;
-    if (hasBackend && workspaceId) {
-      await saveProjectsToDB(workspaceId, updated);
+    if (backendReady && workspaceId) {
+      const saved = await saveProjectsToDB(workspaceId, updated);
+      if (!saved) saveProjects(updated); // safety net: always persist locally if cloud fails
     } else {
       saveProjects(updated);
     }
-  }, [viewOnly, workspaceId]);
+  }, [viewOnly, backendReady, workspaceId]);
 
   const handleSave = (form) => {
     if (editTarget) {
@@ -139,7 +148,7 @@ export default function App() {
               ) : null
             )}
             <div style={{ marginLeft: 'auto' }}>
-              <ShareButton workspaceId={workspaceId} projects={projects} />
+              <ShareButton workspaceId={backendReady ? workspaceId : null} projects={projects} />
             </div>
           </div>
         )}
