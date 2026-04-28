@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { buildShareUrl, encodeProjectsToUrl } from '../utils/storage';
-import { hasBackend } from '../utils/database';
 import { useTheme } from '../ThemeContext';
 
 export default function ShareButton({ workspaceId, projects }) {
@@ -9,7 +8,7 @@ export default function ShareButton({ workspaceId, projects }) {
   const [hov, setHov] = useState(false);
 
   const handleCopy = async () => {
-    const url = hasBackend && workspaceId
+    const url = workspaceId
       ? buildShareUrl(workspaceId)
       : encodeProjectsToUrl(projects);
     try {
