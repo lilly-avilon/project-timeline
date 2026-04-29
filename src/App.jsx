@@ -1,14 +1,14 @@
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { useWorkspace } from './hooks/useWorkspace';
 import { getTotalDaysLeft, getUrgencyLevel } from './utils/countdown';
 import { useTheme } from './ThemeContext';
-import Header from './components/Header';
+import Sidebar from './components/Sidebar';
+import TopBar from './components/TopBar';
 import ProjectCard from './components/ProjectCard';
 import ProjectForm from './components/ProjectForm';
 import ShareButton from './components/ShareButton';
 import FilterTabs from './components/FilterTabs';
 
-// Module-level constant — not recreated on every render
 const FILTER_MAP = {
   all:      null,
   overdue:  ['overdue'],
@@ -21,8 +21,16 @@ function generateId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+function useIsDesktop() {
+  return useSyncExternalStore(
+    cb => { window.addEventListener('resize', cb); return () => window.removeEventListener('resize', cb); },
+    () => window.innerWidth >= 768,
+  );
+}
+
 export default function App() {
   const { theme } = useTheme();
+  const isDesktop = useIsDesktop();
   const {
     projects, loading, backendReady,
     workspaceId, viewOnly, isSharedRef, persist,
@@ -60,92 +68,100 @@ export default function App() {
     ? sorted.filter(p => filterLevels.includes(getUrgencyLevel(getTotalDaysLeft(p.deadline))))
     : sorted;
 
+  const shareBtn = projects.length > 0
+    ? <ShareButton workspaceId={backendReady ? workspaceId : null} projects={projects} />
+    : null;
+
   // ── Loading state ──────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
-        {isSharedRef.current && <Header onAdd={null} />}
-        <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
-          {isSharedRef.current
-            ? <SkeletonGrid theme={theme} />
-            : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
-                <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
-              </div>
-            )
-          }
-        </main>
+      <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
+        {isDesktop && <Sidebar />}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+          <TopBar showLogo={!isDesktop} />
+          <main style={{ flex: 1, padding: '28px 28px 60px' }}>
+            {isSharedRef.current
+              ? <SkeletonGrid theme={theme} />
+              : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '50vh' }}>
+                  <div style={{ fontSize: 14, color: theme.text3, fontWeight: 500 }}>Loading…</div>
+                </div>
+              )
+            }
+          </main>
+        </div>
       </div>
     );
   }
 
   // ── Main render ────────────────────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
-      <Header onAdd={viewOnly ? null : handleAdd} />
+    <div style={{ display: 'flex', minHeight: '100vh', backgroundColor: theme.bg, transition: 'background-color 0.2s' }}>
+      {isDesktop && <Sidebar />}
 
-      <main style={{ maxWidth: 1280, margin: '0 auto', padding: '28px 24px 60px' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        <TopBar onAdd={viewOnly ? null : handleAdd} showLogo={!isDesktop}>
+          {shareBtn}
+        </TopBar>
 
-        {/* Static snapshot banner (?data= links) */}
-        {viewOnly && (
-          <Banner
-            color="#818cf8"
-            bg="rgba(99,102,241,0.1)"
-            border="rgba(99,102,241,0.25)"
-            icon={<EyeIcon />}
-            text={<><strong>Snapshot view</strong> — static copy. Ask the owner for a live link.</>}
-          />
-        )}
+        <main style={{ flex: 1, padding: isDesktop ? '28px 32px 60px' : '20px 16px 60px' }}>
 
-        {/* Collaborative workspace banner (?ws= links) */}
-        {!viewOnly && isSharedRef.current && (
-          <Banner
-            color="#059669"
-            bg="rgba(5,150,105,0.08)"
-            border="rgba(5,150,105,0.2)"
-            icon={<PeopleIcon />}
-            text={<><strong>Shared workspace</strong> — live sync. Everyone with this link can add and edit.</>}
-          />
-        )}
+          {/* Banners */}
+          {viewOnly && (
+            <Banner
+              color="#818cf8" bg="rgba(99,102,241,0.1)" border="rgba(99,102,241,0.25)"
+              icon={<EyeIcon />}
+              text={<><strong>Snapshot view</strong> — static copy. Ask the owner for a live link.</>}
+            />
+          )}
+          {!viewOnly && isSharedRef.current && (
+            <Banner
+              color="#059669" bg="rgba(5,150,105,0.08)" border="rgba(5,150,105,0.2)"
+              icon={<PeopleIcon />}
+              text={<><strong>Shared workspace</strong> — live sync. Everyone with this link can add and edit.</>}
+            />
+          )}
 
-        {/* Summary bar + Share */}
-        {projects.length > 0 && (
-          <div style={{ marginBottom: 20, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 13, color: theme.summaryText, fontWeight: 600, marginRight: 4, transition: 'color 0.2s' }}>
-              {projects.length} project{projects.length !== 1 ? 's' : ''}
-            </span>
-            {['overdue', 'red', 'orange', 'yellow', 'green'].map(lv =>
-              counts[lv] ? <StatusPill key={lv} count={counts[lv]} u={theme.urgency[lv]} /> : null
-            )}
-            <div style={{ marginLeft: 'auto' }}>
-              <ShareButton workspaceId={backendReady ? workspaceId : null} projects={projects} />
+          {/* Summary bar */}
+          {projects.length > 0 && (
+            <div style={{ marginBottom: 18, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: theme.summaryText, fontWeight: 600, marginRight: 4, transition: 'color 0.2s' }}>
+                {projects.length} project{projects.length !== 1 ? 's' : ''}
+              </span>
+              {['overdue', 'red', 'orange', 'yellow', 'green'].map(lv =>
+                counts[lv] ? <StatusPill key={lv} count={counts[lv]} u={theme.urgency[lv]} /> : null
+              )}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Filter tabs */}
-        {projects.length > 0 && (
-          <FilterTabs counts={counts} total={projects.length} active={activeFilter} onChange={setActiveFilter} />
-        )}
+          {/* Filter tabs */}
+          {projects.length > 0 && (
+            <FilterTabs counts={counts} total={projects.length} active={activeFilter} onChange={setActiveFilter} />
+          )}
 
-        {/* Project grid */}
-        {projects.length === 0
-          ? <EmptyState onAdd={handleAdd} viewOnly={viewOnly} theme={theme} />
-          : filtered.length === 0
-            ? (
-              <div style={{ textAlign: 'center', padding: '60px 24px', fontSize: 14, color: theme.text3, fontWeight: 500 }}>
-                No projects in this category.
-              </div>
-            )
-            : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))', gap: 16 }}>
-                {filtered.map(p => (
-                  <ProjectCard key={p.id} project={p} onEdit={handleEdit} onDelete={handleDelete} readOnly={viewOnly} />
-                ))}
-              </div>
-            )
-        }
-      </main>
+          {/* Grid */}
+          {projects.length === 0
+            ? <EmptyState onAdd={handleAdd} viewOnly={viewOnly} theme={theme} />
+            : filtered.length === 0
+              ? (
+                <div style={{ textAlign: 'center', padding: '60px 24px', fontSize: 14, color: theme.text3, fontWeight: 500 }}>
+                  No projects in this category.
+                </div>
+              )
+              : (
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                  gap: 16,
+                }}>
+                  {filtered.map(p => (
+                    <ProjectCard key={p.id} project={p} onEdit={handleEdit} onDelete={handleDelete} readOnly={viewOnly} />
+                  ))}
+                </div>
+              )
+          }
+        </main>
+      </div>
 
       {formOpen && (
         <ProjectForm
@@ -165,9 +181,8 @@ function Banner({ color, bg, border, icon, text }) {
     <div style={{
       marginBottom: 20,
       display: 'flex', alignItems: 'center', gap: 10,
-      background: bg,
-      border: `1.5px solid ${border}`,
-      borderRadius: 12, padding: '12px 16px',
+      background: bg, border: `1.5px solid ${border}`,
+      borderRadius: 12, padding: '11px 16px',
       fontSize: 13, fontWeight: 500, color,
     }}>
       <span style={{ flexShrink: 0, display: 'flex' }}>{icon}</span>
@@ -181,11 +196,11 @@ function SkeletonGrid({ theme }) {
     height: h, borderRadius: 6, background: theme.divider, width: w, ...extra,
   });
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(268px, 1fr))', gap: 16 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
       {[0, 1, 2, 3].map(i => (
         <div key={i} className="skeleton" style={{
           background: theme.card, borderRadius: 16,
-          borderLeft: `5px solid ${theme.divider}`,
+          borderLeft: `4px solid ${theme.divider}`,
           boxShadow: theme.cardShadow,
           padding: '18px 20px 20px',
           display: 'flex', flexDirection: 'column', gap: 10,
@@ -193,8 +208,8 @@ function SkeletonGrid({ theme }) {
           <div style={slab('65%', 14)} />
           <div style={slab('40%', 10, { marginTop: 2 })} />
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
-            <div style={slab('100%', 80, { borderRadius: 12 })} />
-            <div style={slab('100%', 80, { borderRadius: 12 })} />
+            <div style={slab('100%', 76, { borderRadius: 10 })} />
+            <div style={slab('100%', 76, { borderRadius: 10 })} />
           </div>
           <div style={slab('55%', 11, { marginTop: 4 })} />
           <div style={slab('45%', 11)} />
@@ -222,24 +237,26 @@ function StatusPill({ count, u }) {
 function EmptyState({ onAdd, viewOnly, theme }) {
   const [hov, setHov] = useState(false);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 24px', textAlign: 'center' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', padding: '80px 24px', textAlign: 'center',
+    }}>
       <div style={{
-        width: 72, height: 72, borderRadius: 20,
-        background: 'linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(99,102,241,0.08) 100%)',
+        width: 68, height: 68, borderRadius: 18,
+        background: 'linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(99,102,241,0.06) 100%)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         marginBottom: 20,
-        boxShadow: '0 4px 16px rgba(99,102,241,0.15)',
-        border: '1px solid rgba(99,102,241,0.15)',
+        boxShadow: '0 4px 16px rgba(99,102,241,0.12)',
+        border: '1px solid rgba(99,102,241,0.12)',
       }}>
-        <svg width="32" height="32" fill="none" stroke="#6366f1" strokeWidth="1.5" viewBox="0 0 24 24">
+        <svg width="30" height="30" fill="none" stroke="#6366f1" strokeWidth="1.5" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-          <path strokeLinecap="round" d="M12 12v3m0 0l-1.5-1.5M12 15l1.5-1.5" />
         </svg>
       </div>
-      <h3 style={{ fontSize: 18, fontWeight: 800, color: theme.text1, marginBottom: 8, letterSpacing: '-0.02em', transition: 'color 0.2s' }}>
+      <h3 style={{ fontSize: 17, fontWeight: 800, color: theme.text1, marginBottom: 8, letterSpacing: '-0.02em', transition: 'color 0.2s' }}>
         No projects yet
       </h3>
-      <p style={{ fontSize: 14, color: theme.text3, maxWidth: 300, lineHeight: 1.65, marginBottom: 28, transition: 'color 0.2s' }}>
+      <p style={{ fontSize: 14, color: theme.text3, maxWidth: 280, lineHeight: 1.65, marginBottom: 28, transition: 'color 0.2s' }}>
         {viewOnly
           ? 'This shared dashboard has no projects to display.'
           : 'Add your first project to start tracking deadlines and workday countdowns.'}
@@ -253,20 +270,20 @@ function EmptyState({ onAdd, viewOnly, theme }) {
             style={{
               display: 'flex', alignItems: 'center', gap: 8,
               background: hov ? '#4338ca' : '#4f46e5',
-              color: '#fff', border: 'none', borderRadius: 12,
-              padding: '0 24px', height: 44,
+              color: '#fff', border: 'none', borderRadius: 10,
+              padding: '0 22px', height: 42,
               fontSize: 14, fontWeight: 700, cursor: 'pointer',
               transition: 'background 0.15s',
-              boxShadow: '0 2px 12px rgba(79,70,229,0.35)',
+              boxShadow: '0 2px 10px rgba(79,70,229,0.3)',
               fontFamily: 'inherit', letterSpacing: '-0.01em',
             }}
           >
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+            <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
               <path strokeLinecap="round" d="M12 4v16M4 12h16" />
             </svg>
             Add First Project
           </button>
-          <p style={{ fontSize: 12, color: theme.text3, marginTop: 16, transition: 'color 0.2s' }}>
+          <p style={{ fontSize: 12, color: theme.text3, marginTop: 14, transition: 'color 0.2s' }}>
             Workday countdown excludes weekends + Thai public holidays
           </p>
         </>
@@ -274,8 +291,6 @@ function EmptyState({ onAdd, viewOnly, theme }) {
     </div>
   );
 }
-
-// ── Icons ──────────────────────────────────────────────────────────────────
 
 function EyeIcon() {
   return (
@@ -289,7 +304,7 @@ function EyeIcon() {
 function PeopleIcon() {
   return (
     <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
     </svg>
   );
 }

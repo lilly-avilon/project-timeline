@@ -21,9 +21,10 @@ export default function ProjectForm({ project, onSave, onClose }) {
   const validate = () => {
     const e = {};
     if (!form.name.trim())        e.name       = 'Required';
-    if (!form.deadline)           e.deadline    = 'Required';
+    if (!form.deadline)           e.deadline   = 'Required';
+    else if (form.deadline > maxDate) e.deadline = 'Date cannot be more than 10 years from now';
     if (!form.responsible.trim()) e.responsible = 'Required';
-    if (!form.itemName.trim())               e.itemName  = 'Required';
+    if (!form.itemName.trim())    e.itemName   = 'Required';
     if (!form.itemCount || form.itemCount < 1) e.itemCount = 'Min 1';
     return e;
   };
@@ -52,6 +53,12 @@ export default function ProjectForm({ project, onSave, onClose }) {
     cb => { window.addEventListener('resize', cb); return () => window.removeEventListener('resize', cb); },
     () => window.innerWidth >= 640,
   );
+
+  const maxDate = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + 10);
+    return d.toISOString().slice(0, 10);
+  })();
 
   return (
     <div
@@ -108,7 +115,8 @@ export default function ProjectForm({ project, onSave, onClose }) {
           </Field>
 
           <Field label="Deadline Date" required error={errors.deadline} theme={theme}>
-            <input type="date" value={form.deadline} onChange={e => set('deadline', e.target.value)} style={inp(!!errors.deadline)} />
+            <input type="date" value={form.deadline} max={maxDate}
+              onChange={e => set('deadline', e.target.value)} style={inp(!!errors.deadline)} />
           </Field>
 
           <Field label="Responsible" required error={errors.responsible} theme={theme}>
